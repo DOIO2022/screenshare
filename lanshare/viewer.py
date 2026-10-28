@@ -30,11 +30,23 @@ class RemoteViewer:
         self._send_q: asyncio.Queue | None = None
         self._last_mm = 0.0
         self._host_label = ""
+        self._host_panel = None
+        self._viewer_pane = None
+        self._viewer_left = None
+        self._bar = None
+        self._chrome_pack: dict | None = None
+        self._left_pane_hidden = False
 
         self._build_ui()
 
+    def set_shell(self, host_panel, viewer_pane, viewer_left):
+        self._host_panel = host_panel
+        self._viewer_pane = viewer_pane
+        self._viewer_left = viewer_left
+
     def _build_ui(self):
         bar = tk.Frame(self.root, bg="#1e293b", height=self.BAR_H)
+        self._bar = bar
         bar.pack(side=tk.TOP, fill=tk.X)
         bar.pack_propagate(False)
 
@@ -87,6 +99,8 @@ class RemoteViewer:
 
     def disconnect(self):
         self.connected = False
+        if self.fullscreen:
+            self._exit_immersive()
         if self._loop and self._loop.is_running():
             self._loop.call_soon_threadsafe(self._loop.stop)
         self.status_lbl.config(text="● 未连接", fg="#f87171")
@@ -98,23 +112,82 @@ class RemoteViewer:
 
     def _on_escape(self, _event=None):
         if self.fullscreen:
-            self.fullscreen = False
-            self._window.attributes("-fullscreen", False)
+            self._exit_immersive()
         return "break"
 
     def toggle_fullscreen(self):
-        self.fullscreen = not self.fullscreen
-        self._window.attributes("-fullscreen", self.fullscreen)
+        if self.fullscreen:
+            self._exit_immersive()
+        else:
+            self._enter_immersive()
+
+    def _enter_immersive(self):
+        if not self._viewer_pane or not self._host_panel:
+            self.fullscreen = True
+            self._window.attributes("-fullscreen", True)
+            return
+
+        self.fullscreen = True
+        self._chrome_pack = {
+            "host": self._host_panel.pack_info(),
+            "pane": self._viewer_pane.pack_info(),
+            "bar": self._bar.pack_info() if self._bar else {},
+            "canvas": self.canvas.pack_info(),
+        }
+
+        self._host_panel.pack_forget()
+        if self._bar:
+            self._bar.pack_forget()
+        try:
+            self._viewer_pane.forget(self._viewer_left)
+            self._left_pane_hidden = True
+        except tk.TclError:
+            self._left_pane_hidden = False
+        self._viewer_pane.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
+        self.canvas.pack(fill=tk.BOTH, expand=True)
+
+        self._window.configure(bg="#000000", padx=0, pady=0)
+        self.root.configure(bg="#000000")
+        self._window.attributes("-fullscreen", True)
+        self.canvas.configure(bg="#000000")
+        self.canvas.focus_set()
         self._window.focus_force()
+        self._redraw()
+
+    def _exit_immersive(self):
+        if not self.fullscreen:
+            return
+        self.fullscreen = False
+        self._window.attributes("-fullscreen", False)
+        self._window.configure(padx=0, pady=0)
+
+        if self._chrome_pack:
+            self.canvas.pack(**self._chrome_pack.get("canvas", {"fill": tk.BOTH, "expand": True}))
+            if self._bar:
+                self._bar.pack(**self._chrome_pack["bar"])
+            if self._left_pane_hidden:
+                try:
+                    self._viewer_pane.add(self._viewer_left, width=280)
+                except tk.TclError:
+                    pass
+                self._left_pane_hidden = False
+            self._viewer_pane.pack(**self._chrome_pack["pane"])
+            self._host_panel.pack(**self._chrome_pack["host"])
+        self._chrome_pack = None
+        self._window.focus_force()
+        self._redraw()
 
     def _norm_pos(self, event):
         cw = max(1, self.canvas.winfo_width())
         ch = max(1, self.canvas.winfo_height())
-        scale = min(cw / self.screen_w, ch / self.screen_h)
-        dw = self.screen_w * scale
-        dh = self.screen_h * scale
-        ox = (cw - dw) / 2
-        oy = (ch - dh) / 2
+        if self.fullscreen:
+            dw, dh, ox, oy = cw, ch, 0, 0
+        else:
+            scale = min(cw / self.screen_w, ch / self.screen_h)
+            dw = self.screen_w * scale
+            dh = self.screen_h * scale
+            ox = (cw - dw) / 2
+            oy = (ch - dh) / 2
         x = (event.x - ox) / dw
         y = (event.y - oy) / dh
         if 0 <= x <= 1 and 0 <= y <= 1:
@@ -210,13 +283,21 @@ class RemoteViewer:
             self.canvas.update_idletasks()
             cw = max(1, self.canvas.winfo_width())
             ch = max(1, self.canvas.winfo_height())
-            scale = min(cw / self.screen_w, ch / self.screen_h)
-            dw = max(1, int(self.screen_w * scale))
-            dh = max(1, int(self.screen_h * scale))
-            img = img.resize((dw, dh), Image.Resampling.LANCZOS)
+            if self.fullscreen:
+                dw = max(1, cw)
+                dh = max(1, ch)
+                resample = Image.Resampling.BILINEAR
+            else:
+                scale = min(cw / self.screen_w, ch / self.screen_h)
+                dw = max(1, int(self.screen_w * scale))
+                dh = max(1, int(self.screen_h * scale))
+                resample = Image.Resampling.LANCZOS
+            img = img.resize((dw, dh), resample)
             self._photo = ImageTk.PhotoImage(img)
             self.canvas.delete("all")
-            self.canvas.create_image((cw - dw) // 2, (ch - dh) // 2, anchor=tk.NW, image=self._photo)
+            ox = 0 if self.fullscreen else (cw - dw) // 2
+            oy = 0 if self.fullscreen else (ch - dh) // 2
+            self.canvas.create_image(ox, oy, anchor=tk.NW, image=self._photo)
         except queue.Empty:
             pass
         except Exception:

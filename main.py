@@ -115,6 +115,7 @@ class LanShareApp:
 
     def _build_host_panel(self):
         frame = ttk.LabelFrame(self.root, text="本机 — 允许他人观看/控制")
+        self._host_panel = frame
         frame.pack(side=tk.TOP, fill=tk.X, padx=12, pady=8)
 
         row = tk.Frame(frame)
@@ -173,9 +174,11 @@ class LanShareApp:
 
     def _build_viewer_panel(self):
         outer = tk.PanedWindow(self.root, orient=tk.HORIZONTAL, sashwidth=4)
+        self._viewer_pane = outer
         outer.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
 
         left = ttk.LabelFrame(outer, text="局域网内的共享电脑")
+        self._viewer_left = left
         outer.add(left, width=280)
 
         self.host_tree = ttk.Treeview(
@@ -197,10 +200,12 @@ class LanShareApp:
         ttk.Button(btns, text="连接选中", command=self._connect_selected).pack(side=tk.LEFT)
         ttk.Button(btns, text="手动输入 IP…", command=self._connect_manual).pack(side=tk.LEFT, padx=6)
 
-        right = ttk.LabelFrame(outer, text="远程画面")
+        right = tk.Frame(outer, bg="#0f172a")
+        self._viewer_right = right
         outer.add(right)
 
         self.viewer = RemoteViewer(right, window=self.root)
+        self.viewer.set_shell(self._host_panel, self._viewer_pane, self._viewer_left)
         self.root.bind("<F11>", self.viewer._on_f11, add="+")
         self.viewer.start_polling()
 
