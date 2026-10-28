@@ -1,0 +1,36 @@
+为什么项目里没有 dist\LanShare-win32-x64\？
+==========================================
+
+dist 文件夹不会预先放在源码里，需要在你自己的 Windows 电脑上
+「打包一次」后才会出现。PyInstaller 只能在本机系统上生成对应平台的 exe，
+在 Linux / Mac 上无法直接产出 Windows 的 LanShare.exe。
+
+【方法一 — 在 Windows 上打包（最常见）】
+
+  1. 把整个 screenshare 文件夹复制到 Windows（U 盘、网盘均可）
+  2. 安装 Python 3.10 或 3.11（https://www.python.org/）
+     安装时勾选 “Add python.exe to PATH”
+  3. 进入 screenshare 文件夹，任选一种打包方式：
+     A) 右键 Build-LanShare.ps1 -> 使用 PowerShell 运行
+        （未装 Python 时会自动下载便携 Python 到 .tools，无需系统安装）
+     B) 已安装 Python 并勾选 PATH 时，双击 build.bat
+
+     若 build.bat 出现乱码或「不是内部或外部命令」，请改用方式 A。
+  4. 等待几分钟，成功后会出现：
+       dist\LanShare-win32-x64\   ← 文件夹版，推荐
+     若运行的是 build-onefile.bat，则会出现：
+       dist\LanShare.exe          ← 单文件版
+  5. 把 dist 里生成的东西拷到其它电脑使用，那些电脑不用再装 Python
+
+【方法二 — 用 GitHub 自动打包（本机不想装 Python 时）】
+
+  1. 把本项目推到 GitHub
+  2. 打开仓库 → Actions → “Build Windows client” → Run workflow
+  3. 跑完后在 Artifacts 里下载 LanShare-Windows-no-install.zip
+  4. 解压即得 LanShare-win32-x64 和 LanShare.exe
+
+【若在 Windows 上运行 build.bat 仍没有 dist】
+
+  · 看黑色窗口里是否报错（常见：未装 Python、pip 网络失败）
+  · 确认是在 screenshare 目录下运行的 build.bat
+  · 把完整报错截图发出来便于排查

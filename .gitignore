@@ -1,0 +1,10 @@
+_refs/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.last_host
+build/
+.tools/
+# dist/ is created locally by build.bat on Windows — not committed
+dist/
