@@ -1,4 +1,4 @@
-"""Windows mouse/keyboard injection via SendInput (more reliable than pynput for remote control)."""
+"""Windows mouse/keyboard injection via SendInput."""
 
 import sys
 
@@ -13,13 +13,15 @@ _user32 = ctypes.windll.user32
 INPUT_MOUSE = 0
 INPUT_KEYBOARD = 1
 KEYEVENTF_KEYUP = 0x0002
-MOUSEEVENTF_MOVE = 0x0001
+KEYEVENTF_UNICODE = 0x0004
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
 MOUSEEVENTF_RIGHTDOWN = 0x0008
 MOUSEEVENTF_RIGHTUP = 0x0010
 MOUSEEVENTF_WHEEL = 0x0800
 WHEEL_DELTA = 120
+
+_last_move: tuple[int, int] | None = None
 
 
 class MOUSEINPUT(ctypes.Structure):
@@ -77,8 +79,6 @@ def _vk(key: str) -> int | None:
     k = key.lower()
     if k in _VK:
         return _VK[k]
-    if len(k) == 1:
-        return _user32.VkKeyScanW(ord(k.upper())) & 0xFF
     return None
 
 
@@ -88,7 +88,12 @@ def _send(inputs):
 
 
 def move_to(x: int, y: int):
-    _user32.SetCursorPos(int(x), int(y))
+    global _last_move
+    pos = (int(x), int(y))
+    if _last_move == pos:
+        return
+    _last_move = pos
+    _user32.SetCursorPos(pos[0], pos[1])
 
 
 def mouse_button(button: str, down: bool):
@@ -109,10 +114,18 @@ def scroll(dy: int):
 
 
 def key_action(key: str, down: bool):
+    flags = KEYEVENTF_KEYUP if not down else 0
+    if len(key) == 1:
+        scan = ord(key)
+        inp = INPUT(
+            type=INPUT_KEYBOARD,
+            u=INPUT_UNION(ki=KEYBDINPUT(0, scan, flags | KEYEVENTF_UNICODE, 0, None)),
+        )
+        _send([inp])
+        return
     vk = _vk(key)
     if vk is None:
         return
-    flags = 0 if down else KEYEVENTF_KEYUP
     inp = INPUT(type=INPUT_KEYBOARD, u=INPUT_UNION(ki=KEYBDINPUT(vk, 0, flags, 0, None)))
     _send([inp])
 

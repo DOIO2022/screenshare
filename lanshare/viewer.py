@@ -14,7 +14,7 @@ from PIL import Image, ImageTk
 
 class RemoteViewer:
     BAR_H = 40
-    MM_RATE = 1 / 25
+    MM_RATE = 1 / 12
 
     def __init__(self, parent: tk.Misc, window: tk.Misc | None = None):
         self.root = parent
@@ -27,9 +27,11 @@ class RemoteViewer:
         self._photo = None
         self._loop = None
         self._ws_thread = None
-        self._send_q: asyncio.Queue | None = None
+        self._send_hi: asyncio.Queue | None = None
+        self._send_lo: asyncio.Queue | None = None
         self._last_mm = 0.0
         self._host_label = ""
+        self._global_keys = False
         self._host_panel = None
         self._viewer_pane = None
         self._viewer_left = None
@@ -81,9 +83,7 @@ class RemoteViewer:
         self.canvas.bind("<MouseWheel>", self._on_wheel)
         self.canvas.bind("<Button-1>", lambda e: self.canvas.focus_set(), add="+")
         self.canvas.bind("<Button-3>", lambda e: self.canvas.focus_set(), add="+")
-        for widget in (self._window, self.root, self.canvas):
-            widget.bind("<KeyPress>", self._on_key_down)
-            widget.bind("<KeyRelease>", self._on_key_up)
+        self.canvas.bind("<Enter>", lambda _e: self.canvas.focus_set())
         for widget in (self._window, self.root, self.canvas):
             widget.bind("<F11>", self._on_f11)
             widget.bind("<Escape>", self._on_escape)
@@ -105,6 +105,19 @@ class RemoteViewer:
             self._loop.call_soon_threadsafe(self._loop.stop)
         self.status_lbl.config(text="● 未连接", fg="#f87171")
         self.canvas.delete("all")
+
+    def _from_text_entry(self, event) -> bool:
+        w = event.widget
+        if isinstance(w, (tk.Entry, ttk.Combobox)):
+            return True
+        return w.winfo_class() in ("Entry", "TEntry")
+
+    def _install_global_keys(self):
+        if self._global_keys:
+            return
+        self._window.bind_all("<KeyPress>", self._on_key_down, add="+")
+        self._window.bind_all("<KeyRelease>", self._on_key_up, add="+")
+        self._global_keys = True
 
     def _on_f11(self, _event=None):
         self.toggle_fullscreen()
@@ -194,10 +207,23 @@ class RemoteViewer:
             return x, y
         return None
 
+    async def _enqueue(self, msg: dict):
+        if msg.get("t") == "mm":
+            try:
+                self._send_lo.put_nowait(msg)
+            except asyncio.QueueFull:
+                try:
+                    self._send_lo.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+                self._send_lo.put_nowait(msg)
+        else:
+            await self._send_hi.put(msg)
+
     def _send(self, msg: dict):
-        if not self.connected or not self._send_q or not self._loop:
+        if not self.connected or not self._loop or not self._send_hi or not self._send_lo:
             return
-        asyncio.run_coroutine_threadsafe(self._send_q.put(msg), self._loop)
+        asyncio.run_coroutine_threadsafe(self._enqueue(msg), self._loop)
 
     def _on_motion(self, event):
         now = time.monotonic()
@@ -252,19 +278,31 @@ class RemoteViewer:
 
     def _on_key_down(self, event):
         if event.keysym in ("F11", "Escape"):
+            return "break"
+        if not self.connected or self._from_text_entry(event):
             return
-        if not self.connected:
-            return
+        ch = event.char
+        if ch and len(ch) == 1 and (ch.isprintable() or ch in "\r\n"):
+            key = "enter" if ch in "\r\n" else ch
+            self._send({"t": "kp", "k": key})
+            return "break"
         k = self._key_name(event)
         if k:
             self._send({"t": "kp", "k": k})
+        return "break"
 
     def _on_key_up(self, event):
-        if not self.connected:
+        if not self.connected or self._from_text_entry(event):
             return
+        ch = event.char
+        if ch and len(ch) == 1 and (ch.isprintable() or ch in "\r\n"):
+            key = "enter" if ch in "\r\n" else ch
+            self._send({"t": "kr", "k": key})
+            return "break"
         k = self._key_name(event)
         if k:
             self._send({"t": "kr", "k": k})
+        return "break"
 
     def _push_frame(self, jpg: bytes):
         try:
@@ -322,9 +360,10 @@ class RemoteViewer:
 
             def _on_connected():
                 self.status_lbl.config(
-                    text=f"● 已连接 {self._host_label}（先点画面再键鼠）",
+                    text=f"● 已连接 {self._host_label}（点一下画面后可直接打字）",
                     fg="#4ade80",
                 )
+                self._install_global_keys()
                 self.canvas.focus_set()
                 self._window.focus_force()
 
@@ -332,8 +371,17 @@ class RemoteViewer:
 
             async def sender():
                 while self.connected:
-                    msg = await self._send_q.get()
-                    await ws.send(json.dumps(msg, separators=(",", ":")))
+                    while True:
+                        try:
+                            msg = self._send_hi.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+                        await ws.send(json.dumps(msg, separators=(",", ":")))
+                    try:
+                        msg = self._send_lo.get_nowait()
+                        await ws.send(json.dumps(msg, separators=(",", ":")))
+                    except asyncio.QueueEmpty:
+                        await asyncio.sleep(0.008)
 
             send_task = asyncio.create_task(sender())
             try:
@@ -353,7 +401,8 @@ class RemoteViewer:
     def _ws_main(self, host: str, port: int, password: str):
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
-        self._send_q = asyncio.Queue()
+        self._send_hi = asyncio.Queue()
+        self._send_lo = asyncio.Queue(maxsize=1)
         try:
             self._loop.run_until_complete(self._session(host, port, password))
         except Exception as exc:

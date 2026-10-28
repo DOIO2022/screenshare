@@ -194,7 +194,7 @@ async def _client_handler(
         async for raw in ws:
             cmd = _parse_control_message(raw)
             if cmd:
-                await asyncio.to_thread(_handle_input, cmd, ox, oy, sw, sh, allow_control)
+                _handle_input(cmd, ox, oy, sw, sh, allow_control)
     finally:
         stop.set()
         task.cancel()
