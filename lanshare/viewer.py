@@ -189,12 +189,13 @@ class RemoteViewer:
     def _poll_frame(self):
         try:
             jpg = self.frame_q.get_nowait()
-            img = Image.open(__import__("io").BytesIO(jpg))
+            img = Image.open(__import__("io").BytesIO(jpg)).convert("RGB")
+            self.canvas.update_idletasks()
             cw = max(1, self.canvas.winfo_width())
             ch = max(1, self.canvas.winfo_height())
             scale = min(cw / self.screen_w, ch / self.screen_h)
-            dw = int(self.screen_w * scale)
-            dh = int(self.screen_h * scale)
+            dw = max(1, int(self.screen_w * scale))
+            dh = max(1, int(self.screen_h * scale))
             img = img.resize((dw, dh), Image.Resampling.BILINEAR)
             self._photo = ImageTk.PhotoImage(img)
             self.canvas.delete("all")
@@ -236,6 +237,8 @@ class RemoteViewer:
                 async for raw in ws:
                     if isinstance(raw, bytes) and raw[:1] == b"F" and len(raw) >= 9:
                         sw, sh, jlen = struct.unpack("!HHI", raw[1:9])
+                        if jlen <= 0 or 9 + jlen > len(raw):
+                            continue
                         jpg = raw[9 : 9 + jlen]
                         self.screen_w, self.screen_h = sw, sh
                         self._push_frame(jpg)

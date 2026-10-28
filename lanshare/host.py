@@ -85,7 +85,6 @@ async def _capture_loop(ws, stop: asyncio.Event, sw: int, sh: int):
     dw = min(STREAM_WIDTH, sw)
     dh = int(sh * dw / sw)
     enc = [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
-    header = struct.pack("!HH", sw, sh)
     frame_q: asyncio.Queue = asyncio.Queue(maxsize=1)
     interval = 1.0 / FPS_MAX
 
@@ -105,7 +104,8 @@ async def _capture_loop(ws, stop: asyncio.Event, sw: int, sh: int):
                     if not ok:
                         await asyncio.sleep(0.05)
                         continue
-                    payload = b"F" + struct.pack("!I", len(buf)) + header + buf.tobytes()
+                    jpg = buf.tobytes()
+                    payload = b"F" + struct.pack("!HHI", sw, sh, len(jpg)) + jpg
                     was_full = frame_q.full()
                     try:
                         frame_q.get_nowait()
