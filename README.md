@@ -28,7 +28,13 @@
 | 单文件版 | 仅 `LanShare.exe`（首次启动略慢） |
 
 自己打包：在 Windows 上运行 `build.bat`（文件夹）或 `build-onefile.bat`（单 exe）。  
-也可把仓库推到 GitHub 后，在 **Actions → Build Windows client → Run workflow** 下载构建产物，同样无需在使用者电脑上装依赖。
+### 从 GitHub Actions 下载绿色版（无需本机 Python）
+
+1. 打开仓库 **Actions** → **Build Windows client**
+2. 选最新一条成功的运行记录 → 底部 **Artifacts** → 下载 `LanShare-Windows-no-install.zip`
+3. 解压得到 `LanShare-win32-x64` 文件夹和 `LanShare.exe`
+
+推送 `main` 分支后会自动触发打包；也可在 Actions 页手动 **Run workflow**。
 
 ## 开发者 — 源码调试
 
