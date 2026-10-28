@@ -20,7 +20,7 @@ if errorlevel 1 (
 )
 
 git remote remove origin 2>nul
-git remote add origin https://github.com/DOIO2022/LanShare.git
+git remote add origin https://github.com/DOIO2022/screenshare.git
 
 echo Pushing main branch...
 git push -u origin main
