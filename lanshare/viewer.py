@@ -58,7 +58,7 @@ class RemoteViewer:
         tk.Button(bar, text="断开", command=self.disconnect, **btn).pack(side=tk.RIGHT, padx=8)
         tk.Button(bar, text="全屏 F11", command=self.toggle_fullscreen, **btn).pack(side=tk.RIGHT, padx=4)
 
-        self.canvas = tk.Canvas(self.root, bg="#0f172a", highlightthickness=0)
+        self.canvas = tk.Canvas(self.root, bg="#0f172a", highlightthickness=0, takefocus=True)
         self.canvas.pack(fill=tk.BOTH, expand=True)
         self.canvas.bind("<Configure>", lambda _e: self._redraw())
         self.canvas.bind("<Motion>", self._on_motion)
@@ -69,8 +69,9 @@ class RemoteViewer:
         self.canvas.bind("<MouseWheel>", self._on_wheel)
         self.canvas.bind("<Button-1>", lambda e: self.canvas.focus_set(), add="+")
         self.canvas.bind("<Button-3>", lambda e: self.canvas.focus_set(), add="+")
-        self.root.bind("<KeyPress>", self._on_key_down)
-        self.root.bind("<KeyRelease>", self._on_key_up)
+        for widget in (self._window, self.root, self.canvas):
+            widget.bind("<KeyPress>", self._on_key_down)
+            widget.bind("<KeyRelease>", self._on_key_up)
         for widget in (self._window, self.root, self.canvas):
             widget.bind("<F11>", self._on_f11)
             widget.bind("<Escape>", self._on_escape)
@@ -238,15 +239,19 @@ class RemoteViewer:
             self.connected = True
 
             def _on_connected():
-                self.status_lbl.config(text=f"● 已连接 {self._host_label}", fg="#4ade80")
+                self.status_lbl.config(
+                    text=f"● 已连接 {self._host_label}（先点画面再键鼠）",
+                    fg="#4ade80",
+                )
                 self.canvas.focus_set()
+                self._window.focus_force()
 
             self.root.after(0, _on_connected)
 
             async def sender():
                 while self.connected:
                     msg = await self._send_q.get()
-                    await ws.send(json.dumps(msg))
+                    await ws.send(json.dumps(msg, separators=(",", ":")))
 
             send_task = asyncio.create_task(sender())
             try:

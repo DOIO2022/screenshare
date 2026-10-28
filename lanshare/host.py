@@ -2,6 +2,7 @@ import asyncio
 import json
 import socket
 import struct
+import sys
 import threading
 import time
 from typing import Optional
@@ -10,75 +11,94 @@ import cv2
 import mss
 import numpy as np
 import websockets
-from pynput.keyboard import Controller as KbCtrl, Key, KeyCode
-from pynput.mouse import Button, Controller as MouseCtrl
 
 from .config import DEFAULT_PORT, FPS_MAX, FPS_MIN, JPEG_QUALITY, STREAM_WIDTH
 from .discovery import start_announcer
 from .netutil import local_ip
 
-_mouse = MouseCtrl()
-_keyboard = KbCtrl()
+_IS_WIN = sys.platform == "win32"
+if _IS_WIN:
+    from . import win_input as _input_backend
+else:
+    from pynput.keyboard import Controller as KbCtrl, Key, KeyCode
+    from pynput.mouse import Button, Controller as MouseCtrl
 
-_SPECIAL = {
-    "enter": Key.enter,
-    "backspace": Key.backspace,
-    "tab": Key.tab,
-    "space": Key.space,
-    "escape": Key.esc,
-    "delete": Key.delete,
-    "ctrl": Key.ctrl_l,
-    "alt": Key.alt_l,
-    "shift": Key.shift_l,
-    "up": Key.up,
-    "down": Key.down,
-    "left": Key.left,
-    "right": Key.right,
-    **{f"f{i}": getattr(Key, f"f{i}") for i in range(1, 13)},
-}
+    _mouse = MouseCtrl()
+    _keyboard = KbCtrl()
+    _SPECIAL = {
+        "enter": Key.enter,
+        "backspace": Key.backspace,
+        "tab": Key.tab,
+        "space": Key.space,
+        "escape": Key.esc,
+        "delete": Key.delete,
+        "ctrl": Key.ctrl_l,
+        "alt": Key.alt_l,
+        "shift": Key.shift_l,
+        "up": Key.up,
+        "down": Key.down,
+        "left": Key.left,
+        "right": Key.right,
+        **{f"f{i}": getattr(Key, f"f{i}") for i in range(1, 13)},
+    }
 
 
 def _resolve_key(k: str):
-    if k in _SPECIAL:
-        return _SPECIAL[k]
-    if len(k) == 1:
-        return KeyCode.from_char(k)
+    if not _IS_WIN:
+        if k in _SPECIAL:
+            return _SPECIAL[k]
+        if len(k) == 1:
+            return KeyCode.from_char(k)
     return None
 
 
 def _screen_size():
     with mss.mss() as sct:
         mon = sct.monitors[1]
-        return mon["width"], mon["height"]
+        return mon["left"], mon["top"], mon["width"], mon["height"]
 
 
-def _handle_input(cmd: dict, sw: int, sh: int, allow_control: bool):
+def _parse_control_message(raw) -> dict | None:
+    if isinstance(raw, bytes):
+        try:
+            raw = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    if not isinstance(raw, str):
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+
+
+def _handle_input(cmd: dict, origin_x: int, origin_y: int, sw: int, sh: int, allow_control: bool):
     if not allow_control:
         return
-    t = cmd.get("t")
-    if t == "mm":
-        _mouse.position = (int(cmd["x"] * sw), int(cmd["y"] * sh))
-    elif t == "mc":
-        _mouse.position = (int(cmd["x"] * sw), int(cmd["y"] * sh))
-        btn = Button.left if cmd.get("b") == "l" else Button.right
-        (_mouse.press if cmd.get("d") else _mouse.release)(btn)
-    elif t == "ms":
-        _mouse.position = (int(cmd["x"] * sw), int(cmd["y"] * sh))
-        _mouse.scroll(0, int(cmd.get("dy", 0)))
-    elif t == "kp":
-        key = _resolve_key(cmd.get("k", ""))
-        if key:
-            try:
+    try:
+        if _IS_WIN:
+            _input_backend.handle(cmd, origin_x, origin_y, sw, sh)
+            return
+        t = cmd.get("t")
+        if t == "mm":
+            _mouse.position = (origin_x + int(cmd["x"] * sw), origin_y + int(cmd["y"] * sh))
+        elif t == "mc":
+            _mouse.position = (origin_x + int(cmd["x"] * sw), origin_y + int(cmd["y"] * sh))
+            btn = Button.left if cmd.get("b") == "l" else Button.right
+            (_mouse.press if cmd.get("d") else _mouse.release)(btn)
+        elif t == "ms":
+            _mouse.position = (origin_x + int(cmd["x"] * sw), origin_y + int(cmd["y"] * sh))
+            _mouse.scroll(0, int(cmd.get("dy", 0)))
+        elif t == "kp":
+            key = _resolve_key(cmd.get("k", ""))
+            if key:
                 _keyboard.press(key)
-            except Exception:
-                pass
-    elif t == "kr":
-        key = _resolve_key(cmd.get("k", ""))
-        if key:
-            try:
+        elif t == "kr":
+            key = _resolve_key(cmd.get("k", ""))
+            if key:
                 _keyboard.release(key)
-            except Exception:
-                pass
+    except Exception:
+        pass
 
 
 async def _capture_loop(ws, stop: asyncio.Event, sw: int, sh: int):
@@ -155,18 +175,15 @@ async def _client_handler(ws, password: str, allow_control: bool, on_client_chan
             await ws.close()
             return
 
-    sw, sh = _screen_size()
+    ox, oy, sw, sh = _screen_size()
     stop = asyncio.Event()
     task = asyncio.create_task(_capture_loop(ws, stop, sw, sh))
     on_client_change(1)
     try:
         async for raw in ws:
-            if isinstance(raw, str):
-                try:
-                    cmd = json.loads(raw)
-                    _handle_input(cmd, sw, sh, allow_control)
-                except json.JSONDecodeError:
-                    pass
+            cmd = _parse_control_message(raw)
+            if cmd:
+                await asyncio.to_thread(_handle_input, cmd, ox, oy, sw, sh, allow_control)
     finally:
         stop.set()
         task.cancel()

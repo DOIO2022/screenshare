@@ -19,6 +19,7 @@ hidden = [
     "websockets.legacy.client",
     "pynput.keyboard._win32",
     "pynput.mouse._win32",
+    "lanshare.win_input",
 ]
 
 a = Analysis(
