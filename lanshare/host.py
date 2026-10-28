@@ -84,7 +84,14 @@ def _handle_input(cmd: dict, sw: int, sh: int, allow_control: bool):
 async def _capture_loop(ws, stop: asyncio.Event, sw: int, sh: int):
     dw = min(STREAM_WIDTH, sw)
     dh = int(sh * dw / sw)
-    enc = [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
+    enc = [
+        cv2.IMWRITE_JPEG_QUALITY,
+        JPEG_QUALITY,
+        cv2.IMWRITE_JPEG_OPTIMIZE,
+        1,
+        cv2.IMWRITE_JPEG_SAMPLING_FACTOR,
+        0x111111,
+    ]
     frame_q: asyncio.Queue = asyncio.Queue(maxsize=1)
     interval = 1.0 / FPS_MAX
 
@@ -99,7 +106,7 @@ async def _capture_loop(ws, stop: asyncio.Event, sw: int, sh: int):
                     shot = sct.grab(region)
                     frame = np.frombuffer(shot.raw, dtype=np.uint8).reshape((shot.height, shot.width, 4))[:, :, :3]
                     if frame.shape[1] != dw:
-                        frame = cv2.resize(frame, (dw, dh), interpolation=cv2.INTER_LINEAR)
+                        frame = cv2.resize(frame, (dw, dh), interpolation=cv2.INTER_AREA)
                     ok, buf = cv2.imencode(".jpg", frame, enc)
                     if not ok:
                         await asyncio.sleep(0.05)

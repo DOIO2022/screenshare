@@ -16,8 +16,9 @@ class RemoteViewer:
     BAR_H = 40
     MM_RATE = 1 / 25
 
-    def __init__(self, root: tk.Tk):
-        self.root = root
+    def __init__(self, parent: tk.Misc, window: tk.Misc | None = None):
+        self.root = parent
+        self._window = window if window is not None else parent.winfo_toplevel()
         self.frame_q: queue.Queue = queue.Queue(maxsize=1)
         self.screen_w = 1920
         self.screen_h = 1080
@@ -70,7 +71,9 @@ class RemoteViewer:
         self.canvas.bind("<Button-3>", lambda e: self.canvas.focus_set(), add="+")
         self.root.bind("<KeyPress>", self._on_key_down)
         self.root.bind("<KeyRelease>", self._on_key_up)
-        self.root.bind("<F11>", lambda _e: self.toggle_fullscreen())
+        for widget in (self._window, self.root, self.canvas):
+            widget.bind("<F11>", self._on_f11)
+            widget.bind("<Escape>", self._on_escape)
 
     def connect(self, host: str, port: int, password: str = ""):
         if self.connected:
@@ -88,9 +91,20 @@ class RemoteViewer:
         self.status_lbl.config(text="● 未连接", fg="#f87171")
         self.canvas.delete("all")
 
+    def _on_f11(self, _event=None):
+        self.toggle_fullscreen()
+        return "break"
+
+    def _on_escape(self, _event=None):
+        if self.fullscreen:
+            self.fullscreen = False
+            self._window.attributes("-fullscreen", False)
+        return "break"
+
     def toggle_fullscreen(self):
         self.fullscreen = not self.fullscreen
-        self.root.attributes("-fullscreen", self.fullscreen)
+        self._window.attributes("-fullscreen", self.fullscreen)
+        self._window.focus_force()
 
     def _norm_pos(self, event):
         cw = max(1, self.canvas.winfo_width())
@@ -163,6 +177,8 @@ class RemoteViewer:
         return mapping.get(keysym)
 
     def _on_key_down(self, event):
+        if event.keysym in ("F11", "Escape"):
+            return
         if not self.connected:
             return
         k = self._key_name(event)
@@ -196,7 +212,7 @@ class RemoteViewer:
             scale = min(cw / self.screen_w, ch / self.screen_h)
             dw = max(1, int(self.screen_w * scale))
             dh = max(1, int(self.screen_h * scale))
-            img = img.resize((dw, dh), Image.Resampling.BILINEAR)
+            img = img.resize((dw, dh), Image.Resampling.LANCZOS)
             self._photo = ImageTk.PhotoImage(img)
             self.canvas.delete("all")
             self.canvas.create_image((cw - dw) // 2, (ch - dh) // 2, anchor=tk.NW, image=self._photo)

@@ -200,7 +200,8 @@ class LanShareApp:
         right = ttk.LabelFrame(outer, text="远程画面")
         outer.add(right)
 
-        self.viewer = RemoteViewer(right)
+        self.viewer = RemoteViewer(right, window=self.root)
+        self.root.bind("<F11>", self.viewer._on_f11, add="+")
         self.viewer.start_polling()
 
     def _start_share(self):
