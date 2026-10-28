@@ -12,9 +12,10 @@ import mss
 import numpy as np
 import websockets
 
-from .config import DEFAULT_PORT, FPS_MAX, FPS_MIN, JPEG_QUALITY, STREAM_WIDTH
+from .config import DEFAULT_PORT
 from .discovery import start_announcer
 from .netutil import local_ip
+from .stream_profiles import StreamProfile, get_profile
 
 _IS_WIN = sys.platform == "win32"
 if _IS_WIN:
@@ -101,19 +102,30 @@ def _handle_input(cmd: dict, origin_x: int, origin_y: int, sw: int, sh: int, all
         pass
 
 
-async def _capture_loop(ws, stop: asyncio.Event, sw: int, sh: int):
-    dw = min(STREAM_WIDTH, sw)
+def _jpeg_params(profile: StreamProfile) -> list[int]:
+    params = [cv2.IMWRITE_JPEG_QUALITY, profile.jpeg_quality]
+    if profile.jpeg_subsample is not None:
+        params.extend([cv2.IMWRITE_JPEG_SAMPLING_FACTOR, profile.jpeg_subsample])
+    return params
+
+
+def _encode_shot(raw: bytes, width: int, height: int, sw: int, sh: int, profile: StreamProfile) -> bytes | None:
+    frame = np.frombuffer(raw, dtype=np.uint8).reshape((height, width, 4))[:, :, :3]
+    dw = sw if profile.max_width <= 0 else min(profile.max_width, sw)
     dh = int(sh * dw / sw)
-    enc = [
-        cv2.IMWRITE_JPEG_QUALITY,
-        JPEG_QUALITY,
-        cv2.IMWRITE_JPEG_OPTIMIZE,
-        1,
-        cv2.IMWRITE_JPEG_SAMPLING_FACTOR,
-        0x111111,
-    ]
+    if frame.shape[1] != dw or frame.shape[0] != dh:
+        frame = cv2.resize(frame, (dw, dh), interpolation=cv2.INTER_AREA)
+    ok, buf = cv2.imencode(".jpg", frame, _jpeg_params(profile))
+    if not ok:
+        return None
+    jpg = buf.tobytes()
+    return b"F" + struct.pack("!HHI", sw, sh, len(jpg)) + jpg
+
+
+async def _capture_loop(ws, stop: asyncio.Event, sw: int, sh: int, profile_key: str):
+    profile = get_profile(profile_key)
     frame_q: asyncio.Queue = asyncio.Queue(maxsize=1)
-    interval = 1.0 / FPS_MAX
+    interval = 1.0 / profile.fps_max
 
     async def capture():
         nonlocal interval
@@ -124,15 +136,12 @@ async def _capture_loop(ws, stop: asyncio.Event, sw: int, sh: int):
                 t0 = time.perf_counter()
                 try:
                     shot = sct.grab(region)
-                    frame = np.frombuffer(shot.raw, dtype=np.uint8).reshape((shot.height, shot.width, 4))[:, :, :3]
-                    if frame.shape[1] != dw:
-                        frame = cv2.resize(frame, (dw, dh), interpolation=cv2.INTER_AREA)
-                    ok, buf = cv2.imencode(".jpg", frame, enc)
-                    if not ok:
-                        await asyncio.sleep(0.05)
+                    payload = await asyncio.to_thread(
+                        _encode_shot, shot.raw, shot.width, shot.height, sw, sh, profile
+                    )
+                    if payload is None:
+                        await asyncio.sleep(0.01)
                         continue
-                    jpg = buf.tobytes()
-                    payload = b"F" + struct.pack("!HHI", sw, sh, len(jpg)) + jpg
                     was_full = frame_q.full()
                     try:
                         frame_q.get_nowait()
@@ -140,9 +149,9 @@ async def _capture_loop(ws, stop: asyncio.Event, sw: int, sh: int):
                         pass
                     frame_q.put_nowait(payload)
                     if was_full:
-                        interval = min(1.0 / FPS_MIN, interval * 1.1)
+                        interval = min(1.0 / profile.fps_min, interval * 1.08)
                     else:
-                        interval = max(1.0 / FPS_MAX, interval * 0.95)
+                        interval = max(1.0 / profile.fps_max, interval * 0.97)
                 except Exception:
                     break
                 dt = time.perf_counter() - t0
@@ -161,7 +170,9 @@ async def _capture_loop(ws, stop: asyncio.Event, sw: int, sh: int):
     await asyncio.gather(capture(), send_frames())
 
 
-async def _client_handler(ws, password: str, allow_control: bool, on_client_change):
+async def _client_handler(
+    ws, password: str, allow_control: bool, on_client_change, stream_profile_key: str
+):
     if password:
         try:
             first = await asyncio.wait_for(ws.recv(), timeout=15.0)
@@ -177,7 +188,7 @@ async def _client_handler(ws, password: str, allow_control: bool, on_client_chan
 
     ox, oy, sw, sh = _screen_size()
     stop = asyncio.Event()
-    task = asyncio.create_task(_capture_loop(ws, stop, sw, sh))
+    task = asyncio.create_task(_capture_loop(ws, stop, sw, sh, stream_profile_key))
     on_client_change(1)
     try:
         async for raw in ws:
@@ -202,6 +213,7 @@ class ShareHost:
         self.password = ""
         self.allow_control = True
         self.device_name = socket.gethostname()
+        self.stream_profile = "balanced"
 
     @property
     def client_count(self) -> int:
@@ -220,7 +232,13 @@ class ShareHost:
         self._stop_serve = stop
 
         async def handler(ws):
-            await _client_handler(ws, host_ref.password, host_ref.allow_control, host_ref._on_client_change)
+            await _client_handler(
+                ws,
+                host_ref.password,
+                host_ref.allow_control,
+                host_ref._on_client_change,
+                host_ref.stream_profile,
+            )
 
         async with websockets.serve(
             handler,

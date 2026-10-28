@@ -39,6 +39,7 @@ from lanshare.host import ShareHost
 from lanshare.netutil import local_ip
 from lanshare import settings as app_settings
 from lanshare import startup as win_startup
+from lanshare.stream_profiles import PROFILES, DEFAULT_PROFILE
 from lanshare.viewer import RemoteViewer
 
 
@@ -137,6 +138,25 @@ class LanShareApp:
         self.control_var = tk.BooleanVar(value=bool(self._cfg.get("allow_control", True)))
         ttk.Checkbutton(row, text="允许远程键鼠", variable=self.control_var).pack(side=tk.LEFT, padx=12)
 
+        tk.Label(row, text="画质:").pack(side=tk.LEFT, padx=(12, 0))
+        profile_default = self._cfg.get("stream_profile", DEFAULT_PROFILE)
+        if profile_default not in PROFILES:
+            profile_default = DEFAULT_PROFILE
+        self._profile_key_by_label = {p.label: k for k, p in PROFILES.items()}
+        self.profile_var = tk.StringVar(value=PROFILES[profile_default].label)
+        self._profile_hint = tk.StringVar(value="")
+        profile_box = ttk.Combobox(
+            row,
+            textvariable=self.profile_var,
+            values=[PROFILES[k].label for k in PROFILES],
+            state="readonly",
+            width=14,
+        )
+        profile_box.pack(side=tk.LEFT, padx=4)
+        profile_box.bind("<<ComboboxSelected>>", self._on_profile_selected)
+        self._update_profile_hint()
+        tk.Label(row, textvariable=self._profile_hint, fg="#64748b").pack(side=tk.LEFT, padx=4)
+
         row_boot = tk.Frame(frame)
         row_boot.pack(fill=tk.X, padx=8, pady=(0, 4))
 
@@ -222,6 +242,7 @@ class LanShareApp:
         self.host.port = port
         self.host.password = self.pin_var.get().strip()
         self.host.allow_control = self.control_var.get()
+        self.host.stream_profile = self._selected_profile_key()
         self._persist_prefs()
 
         ok, addr = self.host.start()
@@ -263,6 +284,21 @@ class LanShareApp:
             return
         self.viewer.connect(str(ip), int(port), pin or "")
 
+    def _selected_profile_key(self) -> str:
+        label = self.profile_var.get().strip()
+        key = self._profile_key_by_label.get(label)
+        return key if key in PROFILES else DEFAULT_PROFILE
+
+    def _update_profile_hint(self):
+        key = self._selected_profile_key()
+        p = PROFILES[key]
+        width = "原分辨率" if p.max_width <= 0 else f"宽≤{p.max_width}"
+        self._profile_hint.set(f"{width} · {p.fps_max}FPS · JPEG{p.jpeg_quality}")
+
+    def _on_profile_selected(self, _event=None):
+        self._update_profile_hint()
+        self._persist_prefs()
+
     def _persist_prefs(self):
         try:
             port = int(self.port_var.get().strip())
@@ -275,6 +311,7 @@ class LanShareApp:
                 "password": self.pin_var.get().strip(),
                 "allow_control": self.control_var.get(),
                 "auto_share": self.auto_share_var.get(),
+                "stream_profile": self._selected_profile_key(),
             }
         )
 

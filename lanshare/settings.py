@@ -23,6 +23,7 @@ def load() -> dict[str, Any]:
         "port": 8765,
         "password": "",
         "allow_control": True,
+        "stream_profile": "balanced",
     }
     path = settings_path()
     if not os.path.isfile(path):

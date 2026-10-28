@@ -302,7 +302,8 @@ class RemoteViewer:
             pass
         except Exception:
             pass
-        self.root.after(33, self._poll_frame)
+        delay = 16 if self.connected else 33
+        self.root.after(delay, self._poll_frame)
 
     def _redraw(self):
         if self._photo:
