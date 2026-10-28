@@ -55,6 +55,8 @@ class LanShareApp:
         self.host = ShareHost()
         self._discovered: dict[str, tuple[str, str, int]] = {}
         self._disc_stop = threading.Event()
+        self._last_selected_key: str | None = None
+        self._refresh_scheduled = False
 
         self._build_host_panel()
         self._build_viewer_panel()
@@ -66,14 +68,50 @@ class LanShareApp:
 
     def _on_discovered(self, name: str, ip: str, port: int):
         key = f"{ip}:{port}"
-        self._discovered[key] = (name, ip, port)
-        self.root.after(0, self._refresh_hosts)
+        entry = (name, ip, port)
+        if self._discovered.get(key) == entry:
+            return
+        self._discovered[key] = entry
+        if not self._refresh_scheduled:
+            self._refresh_scheduled = True
+            self.root.after(0, self._refresh_hosts)
 
     def _refresh_hosts(self):
-        for item in self.host_tree.get_children():
-            self.host_tree.delete(item)
-        for key, (name, ip, port) in sorted(self._discovered.items(), key=lambda x: x[1][0]):
-            self.host_tree.insert("", tk.END, iid=key, values=(name, ip, port))
+        self._refresh_scheduled = False
+        selected = self._tree_target_key()
+
+        for key in list(self.host_tree.get_children()):
+            if key not in self._discovered:
+                self.host_tree.delete(key)
+
+        for key, (name, ip, port) in sorted(self._discovered.items(), key=lambda x: x[1][0].lower()):
+            values = (name, ip, str(port))
+            if self.host_tree.exists(key):
+                if tuple(self.host_tree.item(key, "values")) != values:
+                    self.host_tree.item(key, values=values)
+            else:
+                self.host_tree.insert("", tk.END, iid=key, values=values)
+
+        if selected and self.host_tree.exists(selected):
+            self.host_tree.selection_set(selected)
+            self.host_tree.focus(selected)
+            self._last_selected_key = selected
+
+    def _on_tree_select(self, _event=None):
+        sel = self.host_tree.selection()
+        if sel:
+            self._last_selected_key = sel[0]
+
+    def _tree_target_key(self) -> str | None:
+        sel = self.host_tree.selection()
+        if sel:
+            return sel[0]
+        if self._last_selected_key and self.host_tree.exists(self._last_selected_key):
+            return self._last_selected_key
+        focus = self.host_tree.focus()
+        if focus and self.host_tree.exists(focus):
+            return focus
+        return None
 
     def _build_host_panel(self):
         frame = ttk.LabelFrame(self.root, text="本机 — 允许他人观看/控制")
@@ -140,7 +178,9 @@ class LanShareApp:
         left = ttk.LabelFrame(outer, text="局域网内的共享电脑")
         outer.add(left, width=280)
 
-        self.host_tree = ttk.Treeview(left, columns=("name", "ip", "port"), show="headings", height=12)
+        self.host_tree = ttk.Treeview(
+            left, columns=("name", "ip", "port"), show="headings", height=12, selectmode="browse"
+        )
         self.host_tree.heading("name", text="名称")
         self.host_tree.heading("ip", text="IP")
         self.host_tree.heading("port", text="端口")
@@ -148,6 +188,9 @@ class LanShareApp:
         self.host_tree.column("ip", width=100)
         self.host_tree.column("port", width=50)
         self.host_tree.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+        self.host_tree.bind("<<TreeviewSelect>>", self._on_tree_select)
+        self.host_tree.bind("<Double-1>", lambda _e: self._connect_selected())
+        self.host_tree.bind("<ButtonRelease-1>", self._on_tree_select)
 
         btns = tk.Frame(left)
         btns.pack(fill=tk.X, padx=6, pady=(0, 6))
@@ -198,15 +241,21 @@ class LanShareApp:
             self.root.after(1000, self._tick_host_status)
 
     def _connect_selected(self):
-        sel = self.host_tree.selection()
-        if not sel:
-            messagebox.showinfo("提示", "请先在列表中选择一台电脑")
+        key = self._tree_target_key()
+        if not key:
+            messagebox.showinfo("提示", "请先在列表中单击选中一台电脑（不要选本机）")
             return
-        _name, ip, port = self.host_tree.item(sel[0], "values")
+        _name, ip, port = self.host_tree.item(key, "values")
+        if ip == local_ip():
+            messagebox.showwarning(
+                "提示",
+                "这是本机（正在共享的那台），不能连自己。\n请选择列表里另一台电脑的 IP。",
+            )
+            return
         pin = simpledialog.askstring("连接密码", "若对方设置了密码请输入（无则留空）:", show="*")
         if pin is None:
             return
-        self.viewer.connect(ip, int(port), pin or "")
+        self.viewer.connect(str(ip), int(port), pin or "")
 
     def _persist_prefs(self):
         try:
